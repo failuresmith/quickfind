@@ -1,5 +1,11 @@
 ## Changelog
 
+### v1.5.2
+
+* Added: integration/e2e watcher harness (`tests/watcher_e2e.rs`) covering create/rename/delete bursts under real OS filesystem event streams.
+* Added: integration/e2e coverage for editor temp-file patterns (e.g. `*.swp`, `*.tmp`, `*~`, hidden temp files) to validate ignore behavior in watch mode.
+* Improved: watcher change handling for rename/remove edge cases and graceful test-time shutdown support.
+
 ### v1.5.1
 
 * Added: `--watch` mode for near real-time background index sync using filesystem notifications.
