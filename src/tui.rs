@@ -1,7 +1,7 @@
 use crate::config::load_config;
 use crate::db;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -26,6 +26,8 @@ enum Focus {
     Search,
     Results,
 }
+
+const RESULT_PAGE_SIZE: usize = 10;
 
 pub fn run_tui(conn: &Connection, initial_search: Option<String>) -> Result<()> {
     // setup terminal
@@ -89,6 +91,89 @@ fn handle_file_opening(path: &str, error_message: &mut Option<String>) {
     }
 }
 
+fn current_selection_range(
+    cursor_position: usize,
+    selection_anchor: Option<usize>,
+) -> Option<(usize, usize)> {
+    selection_anchor.and_then(|anchor| {
+        if anchor == cursor_position {
+            None
+        } else if anchor < cursor_position {
+            Some((anchor, cursor_position))
+        } else {
+            Some((cursor_position, anchor))
+        }
+    })
+}
+
+fn delete_selection_if_any(
+    search_input: &mut String,
+    cursor_position: &mut usize,
+    selection_anchor: &mut Option<usize>,
+) -> bool {
+    if let Some((start, end)) = current_selection_range(*cursor_position, *selection_anchor) {
+        search_input.replace_range(start..end, "");
+        *cursor_position = start;
+        *selection_anchor = None;
+        return true;
+    }
+    false
+}
+
+fn delete_previous_word(
+    search_input: &mut String,
+    cursor_position: &mut usize,
+    selection_anchor: &mut Option<usize>,
+) {
+    if delete_selection_if_any(search_input, cursor_position, selection_anchor)
+        || *cursor_position == 0
+    {
+        return;
+    }
+
+    let bytes = search_input.as_bytes();
+    let mut idx = *cursor_position;
+
+    while idx > 0 && bytes[idx - 1].is_ascii_whitespace() {
+        idx -= 1;
+    }
+    while idx > 0 && !bytes[idx - 1].is_ascii_whitespace() {
+        idx -= 1;
+    }
+
+    search_input.replace_range(idx..*cursor_position, "");
+    *cursor_position = idx;
+}
+
+fn update_results(conn: &Connection, search_input: &str, results_state: &mut ListState) -> Vec<String> {
+    let results = db::search_files(conn, search_input).unwrap_or_default();
+    if results.is_empty() {
+        results_state.select(None);
+    } else {
+        results_state.select(Some(0));
+    }
+    results
+}
+
+fn create_input_spans(search_input: &str, selected_range: Option<(usize, usize)>) -> Vec<Span<'static>> {
+    if let Some((start, end)) = selected_range {
+        let mut spans = Vec::new();
+        if start > 0 {
+            spans.push(Span::raw(search_input[..start].to_string()));
+        }
+        spans.push(Span::styled(
+            search_input[start..end].to_string(),
+            Style::default().bg(Color::Blue).fg(Color::White),
+        ));
+        if end < search_input.len() {
+            spans.push(Span::raw(search_input[end..].to_string()));
+        }
+        spans
+    } else {
+        vec![Span::raw(search_input.to_string())]
+    }
+}
+
 fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     conn: &Connection,
@@ -105,7 +190,8 @@ fn run_app<B: Backend>(
 
     let mut last_tick = Instant::now();
     let mut search_input = initial_search.clone().unwrap_or_default();
-    let mut cursor_position = 0;
+    let mut cursor_position = search_input.len();
+    let mut selection_anchor: Option<usize> = None;
     let mut error_message: Option<String> = None;
 
     let mut search_results = if let Some(term) = initial_search {
@@ -115,15 +201,21 @@ fn run_app<B: Backend>(
     };
 
     let mut results_state = ListState::default();
-    results_state.select(Some(0));
+    if search_results.is_empty() {
+        results_state.select(None);
+    } else {
+        results_state.select(Some(0));
+    }
     let mut focus = Focus::Search;
 
     loop {
+        let selected_range = current_selection_range(cursor_position, selection_anchor);
         terminal.draw(|f| {
             ui(
                 f,
                 &search_input,
-                &mut cursor_position,
+                cursor_position,
+                selected_range,
                 &search_results,
                 &mut results_state,
                 &focus,
@@ -143,9 +235,9 @@ fn run_app<B: Backend>(
                         KeyCode::Enter => {
                             if !search_input.is_empty() {
                                 search_results =
-                                    db::search_files(conn, &search_input).unwrap_or_default();
-                                results_state.select(Some(0));
+                                    update_results(conn, &search_input, &mut results_state);
                                 focus = Focus::Results;
+                                selection_anchor = None;
                                 if let Some(path) = search_results.get(0) {
                                     handle_file_opening(path, &mut error_message);
                                 }
@@ -155,54 +247,135 @@ fn run_app<B: Backend>(
                             if !search_results.is_empty() {
                                 focus = Focus::Results;
                                 results_state.select(Some(0));
+                                selection_anchor = None;
                             }
                         }
                         KeyCode::Backspace => {
-                            if cursor_position > 0 {
+                            let mut edited = false;
+                            if key.modifiers.contains(KeyModifiers::ALT) {
+                                let previous = search_input.clone();
+                                delete_previous_word(
+                                    &mut search_input,
+                                    &mut cursor_position,
+                                    &mut selection_anchor,
+                                );
+                                edited = previous != search_input;
+                            } else if delete_selection_if_any(
+                                &mut search_input,
+                                &mut cursor_position,
+                                &mut selection_anchor,
+                            ) {
+                                edited = true;
+                            } else if cursor_position > 0 {
                                 search_input.remove(cursor_position - 1);
                                 cursor_position -= 1;
-                            } else if !search_input.is_empty() {
-                                search_input.pop();
+                                selection_anchor = None;
+                                edited = true;
                             }
-                            search_results =
-                                db::search_files(conn, &search_input).unwrap_or_default();
-                            results_state.select(Some(0));
-                            error_message = None; // Clear error message on input change
+
+                            if edited {
+                                search_results =
+                                    update_results(conn, &search_input, &mut results_state);
+                                error_message = None;
+                            }
                         }
                         KeyCode::Left => {
-                            if cursor_position > 0 {
-                                cursor_position -= 1;
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                if selection_anchor.is_none() {
+                                    selection_anchor = Some(cursor_position);
+                                }
+                                if cursor_position > 0 {
+                                    cursor_position -= 1;
+                                }
+                            } else {
+                                if cursor_position > 0 {
+                                    cursor_position -= 1;
+                                }
+                                selection_anchor = None;
                             }
                         }
                         KeyCode::Right => {
-                            if cursor_position < search_input.len() {
-                                cursor_position += 1;
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                if selection_anchor.is_none() {
+                                    selection_anchor = Some(cursor_position);
+                                }
+                                if cursor_position < search_input.len() {
+                                    cursor_position += 1;
+                                }
+                            } else {
+                                if cursor_position < search_input.len() {
+                                    cursor_position += 1;
+                                }
+                                selection_anchor = None;
                             }
                         }
                         KeyCode::Home => {
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                if selection_anchor.is_none() {
+                                    selection_anchor = Some(cursor_position);
+                                }
+                            } else {
+                                selection_anchor = None;
+                            }
                             cursor_position = 0;
                         }
                         KeyCode::End => {
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                if selection_anchor.is_none() {
+                                    selection_anchor = Some(cursor_position);
+                                }
+                            } else {
+                                selection_anchor = None;
+                            }
                             cursor_position = search_input.len();
                         }
                         KeyCode::Delete => {
-                            if cursor_position < search_input.len() {
+                            let edited = if delete_selection_if_any(
+                                &mut search_input,
+                                &mut cursor_position,
+                                &mut selection_anchor,
+                            ) {
+                                true
+                            } else if cursor_position < search_input.len() {
                                 search_input.remove(cursor_position);
+                                selection_anchor = None;
+                                true
+                            } else {
+                                false
+                            };
+
+                            if edited {
+                                search_results =
+                                    update_results(conn, &search_input, &mut results_state);
+                                error_message = None;
                             }
                         }
                         KeyCode::Esc => {
                             return Ok(());
                         }
                         KeyCode::Tab => {
-                            focus = Focus::Results;
+                            if !search_results.is_empty() {
+                                focus = Focus::Results;
+                                if results_state.selected().is_none() {
+                                    results_state.select(Some(0));
+                                }
+                            }
                         }
                         KeyCode::Char(c) => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                continue;
+                            }
+
+                            delete_selection_if_any(
+                                &mut search_input,
+                                &mut cursor_position,
+                                &mut selection_anchor,
+                            );
                             search_input.insert(cursor_position, c);
                             cursor_position += 1;
-                            search_results =
-                                db::search_files(conn, &search_input).unwrap_or_default();
-                            results_state.select(Some(0));
-                            error_message = None; // Clear error message on input change
+                            selection_anchor = None;
+                            search_results = update_results(conn, &search_input, &mut results_state);
+                            error_message = None;
                         }
                         _ => {}
                     },
@@ -266,6 +439,7 @@ fn run_app<B: Backend>(
                                 let i = match results_state.selected() {
                                     Some(0) => {
                                         focus = Focus::Search;
+                                        selection_anchor = None;
                                         0
                                     }
                                     Some(i) => {
@@ -276,8 +450,34 @@ fn run_app<B: Backend>(
                                 results_state.select(Some(i));
                             }
                         }
+                        KeyCode::PageDown => {
+                            if !search_results.is_empty() {
+                                let current = results_state.selected().unwrap_or(0);
+                                let next =
+                                    (current + RESULT_PAGE_SIZE).min(search_results.len() - 1);
+                                results_state.select(Some(next));
+                            }
+                        }
+                        KeyCode::PageUp => {
+                            if !search_results.is_empty() {
+                                let current = results_state.selected().unwrap_or(0);
+                                let next = current.saturating_sub(RESULT_PAGE_SIZE);
+                                results_state.select(Some(next));
+                            }
+                        }
+                        KeyCode::Home => {
+                            if !search_results.is_empty() {
+                                results_state.select(Some(0));
+                            }
+                        }
+                        KeyCode::End => {
+                            if !search_results.is_empty() {
+                                results_state.select(Some(search_results.len() - 1));
+                            }
+                        }
                         KeyCode::Tab => {
                             focus = Focus::Search;
+                            selection_anchor = None;
                         }
                         KeyCode::Esc => {
                             return Ok(());
@@ -384,7 +584,8 @@ fn create_highlighted_spans(text: &str, term: &str, highlight_color: &Color) -> 
 fn ui<B: Backend>(
     f: &mut Frame<B>,
     search_input: &str,
-    cursor_position: &mut usize,
+    cursor_position: usize,
+    selected_range: Option<(usize, usize)>,
     search_results: &[String],
     results_state: &mut ListState,
     focus: &Focus,
@@ -409,7 +610,11 @@ fn ui<B: Backend>(
         Focus::Search => Style::default().fg(Color::Green),
         _ => Style::default(),
     };
-    let input = Paragraph::new(search_input).block(
+    let input = Paragraph::new(Text::from(Spans::from(create_input_spans(
+        search_input,
+        selected_range,
+    ))))
+    .block(
         Block::default()
             .borders(Borders::ALL)
             .title("Search")
@@ -418,7 +623,7 @@ fn ui<B: Backend>(
     f.render_widget(input, chunks[0]);
 
     if let Focus::Search = focus {
-        f.set_cursor(chunks[0].x + *cursor_position as u16 + 1, chunks[0].y + 1)
+        f.set_cursor(chunks[0].x + cursor_position as u16 + 1, chunks[0].y + 1)
     }
 
     let results_style = match focus {
@@ -456,8 +661,12 @@ fn ui<B: Backend>(
 
     // Add shortcuts based on focus
     let shortcuts_text = match focus {
-        Focus::Search => " | Esc: Quit",
-        Focus::Results => " | Enter/o: Open | e: Edit | d: Dir | Tab: Search | Esc: Quit",
+        Focus::Search => {
+            " | Alt+Backspace: Del Word | Shift+Home/End: Select | Esc: Quit"
+        }
+        Focus::Results => {
+            " | Enter/o: Open | e: Edit | d: Dir | PgUp/PgDn/Home/End: Navigate | Tab: Search | Esc: Quit"
+        }
     };
     summary_text.push_str(shortcuts_text);
 
