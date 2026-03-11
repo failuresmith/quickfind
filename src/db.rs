@@ -1,6 +1,10 @@
+use crate::query;
 use eyre::Result;
 use rusqlite::{params, Connection, Result as RusqliteResult};
 use std::path::PathBuf;
+
+const MAX_CANDIDATES: usize = 4000;
+const MAX_RESULTS: usize = 500;
 
 pub fn get_db_path() -> Result<PathBuf> {
     let home_dir = home::home_dir().ok_or_else(|| eyre::eyre!("Could not find home directory"))?;
@@ -33,50 +37,93 @@ pub fn insert_file(conn: &Connection, path: &str) -> RusqliteResult<usize> {
     )
 }
 
-// Updated search_files function to handle specific search patterns.
 pub fn search_files(conn: &Connection, term: &str) -> RusqliteResult<Vec<String>> {
-    let mut files = Vec::new();
-    let mut stmt;
+    if term.trim().is_empty() {
+        return Ok(vec![]);
+    }
 
-    if term.starts_with('.') {
-        // General case for terms starting with '.' (e.g., '.mp3', '.config')
-        // Match paths that END with the term (e.g., '.config' matches 'my/path/.config').
-        // We assume terms starting with '.' are literal and do not contain SQL wildcards.
-        let search_term = format!("%{}", term);
-        stmt = conn.prepare("SELECT path FROM files WHERE path LIKE ?1")?;
-        let mut rows = stmt.query(params![search_term])?;
-        while let Some(row) = rows.next()? {
-            files.push(row.get(0)?);
-        }
-    } else {
-        // General case for terms not starting with '.'
-        // Split the term into words and search for each word independently.
-        let search_words: Vec<String> = term
-            .split_whitespace()
-            .map(|s| s.replace('*', "%").replace('?', "_").to_lowercase())
-            .collect();
+    let plan = query::parse_query(term);
+    if plan.is_empty() {
+        return Ok(vec![]);
+    }
 
-        if search_words.is_empty() {
-            return Ok(vec![]);
-        }
+    let (prefilter_sql, prefilter_params) = build_prefilter_query(&plan);
+    let mut stmt = conn.prepare(&prefilter_sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(prefilter_params.iter()),
+        |row| row.get::<_, String>(0),
+    )?;
 
-        let mut query = "SELECT path FROM files WHERE ".to_string();
-        let mut params_vec: Vec<String> = Vec::new();
-
-        for (i, word) in search_words.iter().enumerate() {
-            if i > 0 {
-                query.push_str(" AND ");
-            }
-            query.push_str(&format!("LOWER(path) LIKE ?{}", i + 1));
-            params_vec.push(format!("%{}%", word));
+    let mut scored = Vec::new();
+    for row in rows {
+        let path = row?;
+        if query::path_matches_query(&path, &plan) {
+            let score = query::score_path(&path, &plan);
+            scored.push((path, score));
         }
 
-        let mut stmt = conn.prepare(&query)?;
-        let mut rows = stmt.query(rusqlite::params_from_iter(params_vec))?;
-        while let Some(row) = rows.next()? {
-            files.push(row.get(0)?);
+        if scored.len() >= MAX_CANDIDATES {
+            break;
         }
     }
-    Ok(files)
+
+    scored.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.len().cmp(&b.0.len()))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    Ok(scored
+        .into_iter()
+        .take(MAX_RESULTS)
+        .map(|(path, _)| path)
+        .collect())
+}
+
+fn build_prefilter_query(plan: &query::QueryPlan) -> (String, Vec<String>) {
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+
+    if !plan.include_terms.is_empty() {
+        for term in &plan.include_terms {
+            clauses.push("LOWER(path) LIKE ?".to_string());
+            params.push(format!("%{}%", term));
+        }
+    } else if !plan.ext_filters.is_empty() {
+        let mut ext_clauses = Vec::new();
+        for ext in &plan.ext_filters {
+            ext_clauses.push("LOWER(path) LIKE ?".to_string());
+            params.push(format!("%{}", ext));
+        }
+        clauses.push(format!("({})", ext_clauses.join(" OR ")));
+    } else {
+        for glob in &plan.path_globs {
+            if let Some(fragment) = longest_glob_literal(glob) {
+                clauses.push("LOWER(path) LIKE ?".to_string());
+                params.push(format!("%{}%", fragment));
+            }
+        }
+    }
+
+    for term in &plan.exclude_terms {
+        clauses.push("LOWER(path) NOT LIKE ?".to_string());
+        params.push(format!("%{}%", term));
+    }
+
+    let mut sql = "SELECT path FROM files".to_string();
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(&format!(" LIMIT {}", MAX_CANDIDATES));
+
+    (sql, params)
+}
+
+fn longest_glob_literal(glob: &str) -> Option<String> {
+    glob.split(|c| matches!(c, '*' | '?' | '[' | ']'))
+        .map(|part| part.trim_matches('/').to_lowercase())
+        .filter(|part| part.len() >= 2)
+        .max_by_key(|part| part.len())
 }
 
