@@ -1,5 +1,12 @@
 ## Changelog
 
+### v1.4.0
+
+* Improved: Added richer result navigation in Results focus (`PageUp`, `PageDown`, `Home`, `End`).
+* Improved: Added `Alt+Backspace` in Search focus to delete one word at a time.
+* Improved: Added text selection support in Search focus for `Shift+Home` and `Shift+End` with visual highlighting.
+* Improved: Query UX now supports combined directory + extension behavior like `.tsx /src`.
+
 ### v1.1.1
 
 *   Improved: Enhanced search functionality in `src/db.rs` to support tokenized searches (e.g., "hans mp3" for "Hans Zimmer Time.mp3") and generalized file extension matching (e.g., ".mp3").
