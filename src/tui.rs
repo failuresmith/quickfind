@@ -145,6 +145,45 @@ fn delete_previous_word(
     *cursor_position = idx;
 }
 
+fn previous_word_boundary(search_input: &str, cursor_position: usize) -> usize {
+    let bytes = search_input.as_bytes();
+    let mut idx = cursor_position.min(search_input.len());
+
+    while idx > 0 && bytes[idx - 1].is_ascii_whitespace() {
+        idx -= 1;
+    }
+    while idx > 0 && !bytes[idx - 1].is_ascii_whitespace() {
+        idx -= 1;
+    }
+
+    idx
+}
+
+fn next_word_boundary(search_input: &str, cursor_position: usize) -> usize {
+    let bytes = search_input.as_bytes();
+    let mut idx = cursor_position.min(search_input.len());
+    let len = search_input.len();
+
+    if idx >= len {
+        return len;
+    }
+
+    if bytes[idx].is_ascii_whitespace() {
+        while idx < len && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+    } else {
+        while idx < len && !bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        while idx < len && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+    }
+
+    idx
+}
+
 fn update_results(conn: &Connection, search_input: &str, results_state: &mut ListState) -> Vec<String> {
     let results = db::search_files(conn, search_input).unwrap_or_default();
     if results.is_empty() {
@@ -330,32 +369,54 @@ fn run_app<B: Backend>(
                             }
                         }
                         KeyCode::Left => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            let is_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                            let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+                            if is_shift {
                                 if selection_anchor.is_none() {
                                     selection_anchor = Some(cursor_position);
                                 }
-                                if cursor_position > 0 {
-                                    cursor_position -= 1;
-                                }
+                                cursor_position = if is_ctrl {
+                                    previous_word_boundary(&search_input, cursor_position)
+                                } else if cursor_position > 0 {
+                                    cursor_position - 1
+                                } else {
+                                    0
+                                };
                             } else {
-                                if cursor_position > 0 {
-                                    cursor_position -= 1;
-                                }
+                                cursor_position = if is_ctrl {
+                                    previous_word_boundary(&search_input, cursor_position)
+                                } else if cursor_position > 0 {
+                                    cursor_position - 1
+                                } else {
+                                    0
+                                };
                                 selection_anchor = None;
                             }
                         }
                         KeyCode::Right => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            let is_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                            let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+                            if is_shift {
                                 if selection_anchor.is_none() {
                                     selection_anchor = Some(cursor_position);
                                 }
-                                if cursor_position < search_input.len() {
-                                    cursor_position += 1;
-                                }
+                                cursor_position = if is_ctrl {
+                                    next_word_boundary(&search_input, cursor_position)
+                                } else if cursor_position < search_input.len() {
+                                    cursor_position + 1
+                                } else {
+                                    search_input.len()
+                                };
                             } else {
-                                if cursor_position < search_input.len() {
-                                    cursor_position += 1;
-                                }
+                                cursor_position = if is_ctrl {
+                                    next_word_boundary(&search_input, cursor_position)
+                                } else if cursor_position < search_input.len() {
+                                    cursor_position + 1
+                                } else {
+                                    search_input.len()
+                                };
                                 selection_anchor = None;
                             }
                         }
@@ -753,7 +814,7 @@ fn ui<B: Backend>(
     // Add shortcuts based on focus
     let shortcuts_text = match focus {
         Focus::Search => {
-            " | Ctrl+C/X/V: Clipboard | Alt+Backspace: Del Word | Shift+Home/End: Select | Esc: Quit"
+            " | Ctrl+C/X/V: Clipboard | Ctrl+Shift+←/→: Select Word | Alt+Backspace: Del Word | Shift+Home/End: Select | Esc: Quit"
         }
         Focus::Results => {
             " | Enter/o: Open | e: Edit | d: Dir | PgUp/PgDn/Home/End: Navigate | Tab: Search | Esc: Quit"
