@@ -6,6 +6,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use eyre::Result;
+use glob::Pattern;
 use rusqlite::Connection;
 use std::io::{self};
 use std::{
@@ -695,21 +696,42 @@ fn create_highlighted_spans(text: &str, term: &str, highlight_color: &Color) -> 
         return spans;
     }
 
-    let mut matches = Vec::new();
+    let mut matches: Vec<(usize, usize)> = Vec::new();
     let text_lower = text.to_lowercase();
+    let basename_start = text_lower.rfind('/').map_or(0, |idx| idx + 1);
+    let basename_lower = &text_lower[basename_start..];
 
     for word in words {
         let word_lower = word.to_lowercase();
-        for (start, _) in text_lower.match_indices(&word_lower) {
-            matches.push((start, start + word.len(), word));
+        if has_glob_meta_for_highlight(&word_lower) {
+            let highlight_pattern = if word_lower.starts_with('*') && word_lower.len() > 1 {
+                word_lower.trim_start_matches('*').to_string()
+            } else {
+                word_lower.clone()
+            };
+
+            if word_lower.contains('/') {
+                collect_wildcard_matches(&text_lower, &highlight_pattern, 0, &mut matches);
+            } else {
+                collect_wildcard_matches(
+                    basename_lower,
+                    &highlight_pattern,
+                    basename_start,
+                    &mut matches,
+                );
+            }
+        } else {
+            for (start, _) in text_lower.match_indices(&word_lower) {
+                matches.push((start, start + word_lower.len()));
+            }
         }
     }
 
-    // Sort matches by start index, then by length (descending) to prioritize longer matches if they start at the same position.
-    matches.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    // Sort by start index then end index for deterministic rendering.
+    matches.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
     let mut last_end = 0;
-    for (start, end, _matched_word) in matches {
+    for (start, end) in matches {
         // Skip if this match is completely contained within a previous match
         if start >= last_end {
             // Add text before the current match
@@ -731,6 +753,43 @@ fn create_highlighted_spans(text: &str, term: &str, highlight_color: &Color) -> 
     }
 
     spans
+}
+
+fn has_glob_meta_for_highlight(token: &str) -> bool {
+    token.contains('*') || token.contains('?') || token.contains('[')
+}
+
+fn collect_wildcard_matches(
+    target: &str,
+    pattern: &str,
+    offset: usize,
+    matches: &mut Vec<(usize, usize)>,
+) {
+    if pattern.is_empty() {
+        return;
+    }
+
+    let Ok(glob) = Pattern::new(pattern) else {
+        return;
+    };
+
+    let boundaries = char_boundaries(target);
+    for start_idx in 0..boundaries.len().saturating_sub(1) {
+        let start = boundaries[start_idx];
+        for end_idx in (start_idx + 1)..boundaries.len() {
+            let end = boundaries[end_idx];
+            if glob.matches(&target[start..end]) {
+                matches.push((offset + start, offset + end));
+                break;
+            }
+        }
+    }
+}
+
+fn char_boundaries(s: &str) -> Vec<usize> {
+    let mut boundaries: Vec<usize> = s.char_indices().map(|(idx, _)| idx).collect();
+    boundaries.push(s.len());
+    boundaries
 }
 
 fn ui<B: Backend>(
