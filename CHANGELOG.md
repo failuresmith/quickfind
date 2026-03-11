@@ -1,5 +1,9 @@
 ## Changelog
 
+### v1.4.5
+
+* Fix: Wildcard queries now highlight matched result segments in the TUI (e.g. `.ts?` highlights `tsx`).
+
 ### v1.4.4
 
 * Fix: `?` wildcard now works independently in extension filters (e.g. `.ts?`) without requiring a leading `*`.
