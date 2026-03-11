@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "quickfind"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "clap",
  "crossterm 0.29.0",

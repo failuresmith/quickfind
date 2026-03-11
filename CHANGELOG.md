@@ -1,5 +1,9 @@
 ## Changelog
 
+### v1.4.2
+
+* Improved: Search input now supports `Ctrl+Shift+Left/Right` to expand or shrink text selection by word boundaries.
+
 ### v1.4.1
 
 * Improved: Search input selection now supports `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` clipboard-style editing behavior.
