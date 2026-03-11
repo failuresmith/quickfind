@@ -207,7 +207,7 @@ pub fn run_init_onboarding() -> Result<()> {
     println!("Config saved to {}", config_path.display());
     println!("Next steps:");
     println!("  1) quickfind --index");
-    println!("  2) optionally run ./install.sh to enable daemon mode");
+    println!("  2) optionally run quickfind --setup for full setup + daemon prompt");
     println!("  3) quickfind <query>");
 
     Ok(())
