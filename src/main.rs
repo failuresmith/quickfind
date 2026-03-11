@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod indexing;
+mod query;
 mod tui;
 
 use clap::Parser;
