@@ -1,5 +1,11 @@
 ## Changelog
 
+### v1.5.1
+
+* Added: `--watch` mode for near real-time background index sync using filesystem notifications.
+* Added: incremental DB sync helpers for delete/prune workflows (`remove_file`, `remove_files_under_prefix`, `prune_missing_files`).
+* Added: watcher event debounce + scoped reindex strategy to keep updates responsive without full reindex each change.
+
 ### v1.5.0
 
 * Added: Database schema versioning with migration scaffolding (PRAGMA `user_version`) to support safer future upgrades.
