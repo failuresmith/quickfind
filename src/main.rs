@@ -28,11 +28,11 @@ struct Cli {
     watch: bool,
 
     /// Use polling watcher backend (fallback for unreliable native fs events)
-    #[clap(long, action)]
+    #[clap(long, action, requires = "watch")]
     watch_poll: bool,
 
     /// Polling interval in milliseconds (only used with --watch-poll)
-    #[clap(long, default_value_t = 700)]
+    #[clap(long, default_value_t = 700, requires = "watch_poll")]
     watch_poll_interval_ms: u64,
 }
 
