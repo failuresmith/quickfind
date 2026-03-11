@@ -174,6 +174,55 @@ fn create_input_spans(search_input: &str, selected_range: Option<(usize, usize)>
     }
 }
 
+fn copy_selection_to_clipboard(
+    search_input: &str,
+    cursor_position: usize,
+    selection_anchor: Option<usize>,
+    clipboard: &mut Option<String>,
+) {
+    if let Some((start, end)) = current_selection_range(cursor_position, selection_anchor) {
+        *clipboard = Some(search_input[start..end].to_string());
+    }
+}
+
+fn cut_selection_to_clipboard(
+    search_input: &mut String,
+    cursor_position: &mut usize,
+    selection_anchor: &mut Option<usize>,
+    clipboard: &mut Option<String>,
+) -> bool {
+    if let Some((start, end)) = current_selection_range(*cursor_position, *selection_anchor) {
+        *clipboard = Some(search_input[start..end].to_string());
+        search_input.replace_range(start..end, "");
+        *cursor_position = start;
+        *selection_anchor = None;
+        return true;
+    }
+    false
+}
+
+fn paste_from_clipboard(
+    search_input: &mut String,
+    cursor_position: &mut usize,
+    selection_anchor: &mut Option<usize>,
+    clipboard: &mut Option<String>,
+) -> bool {
+    let Some(mut pasted) = clipboard.clone() else {
+        return false;
+    };
+
+    if pasted.is_empty() {
+        return false;
+    }
+
+    pasted = pasted.replace(['\n', '\r'], " ");
+    delete_selection_if_any(search_input, cursor_position, selection_anchor);
+    search_input.insert_str(*cursor_position, &pasted);
+    *cursor_position += pasted.len();
+    *selection_anchor = None;
+    true
+}
+
 fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     conn: &Connection,
@@ -193,6 +242,7 @@ fn run_app<B: Backend>(
     let mut cursor_position = search_input.len();
     let mut selection_anchor: Option<usize> = None;
     let mut error_message: Option<String> = None;
+    let mut clipboard: Option<String> = None;
 
     let mut search_results = if let Some(term) = initial_search {
         db::search_files(conn, &term).unwrap_or_default()
@@ -363,6 +413,47 @@ fn run_app<B: Backend>(
                         }
                         KeyCode::Char(c) => {
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                match c.to_ascii_lowercase() {
+                                    'c' => {
+                                        copy_selection_to_clipboard(
+                                            &search_input,
+                                            cursor_position,
+                                            selection_anchor,
+                                            &mut clipboard,
+                                        );
+                                    }
+                                    'x' => {
+                                        if cut_selection_to_clipboard(
+                                            &mut search_input,
+                                            &mut cursor_position,
+                                            &mut selection_anchor,
+                                            &mut clipboard,
+                                        ) {
+                                            search_results = update_results(
+                                                conn,
+                                                &search_input,
+                                                &mut results_state,
+                                            );
+                                            error_message = None;
+                                        }
+                                    }
+                                    'v' => {
+                                        if paste_from_clipboard(
+                                            &mut search_input,
+                                            &mut cursor_position,
+                                            &mut selection_anchor,
+                                            &mut clipboard,
+                                        ) {
+                                            search_results = update_results(
+                                                conn,
+                                                &search_input,
+                                                &mut results_state,
+                                            );
+                                            error_message = None;
+                                        }
+                                    }
+                                    _ => {}
+                                }
                                 continue;
                             }
 
@@ -662,7 +753,7 @@ fn ui<B: Backend>(
     // Add shortcuts based on focus
     let shortcuts_text = match focus {
         Focus::Search => {
-            " | Alt+Backspace: Del Word | Shift+Home/End: Select | Esc: Quit"
+            " | Ctrl+C/X/V: Clipboard | Alt+Backspace: Del Word | Shift+Home/End: Select | Esc: Quit"
         }
         Focus::Results => {
             " | Enter/o: Open | e: Edit | d: Dir | PgUp/PgDn/Home/End: Navigate | Tab: Search | Esc: Quit"
