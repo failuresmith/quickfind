@@ -112,6 +112,34 @@ pub fn search_files(conn: &Connection, term: &str) -> RusqliteResult<Vec<String>
         .collect())
 }
 
+pub fn remove_file(conn: &Connection, path: &str) -> RusqliteResult<usize> {
+    conn.execute("DELETE FROM files WHERE path = ?1", params![path])
+}
+
+pub fn remove_files_under_prefix(conn: &Connection, dir_path: &str) -> RusqliteResult<usize> {
+    let normalized = dir_path.trim_end_matches('/');
+    let prefix = format!("{}/%", normalized);
+    conn.execute(
+        "DELETE FROM files WHERE path = ?1 OR path LIKE ?2",
+        params![normalized, prefix],
+    )
+}
+
+pub fn prune_missing_files(conn: &Connection) -> RusqliteResult<usize> {
+    let mut stmt = conn.prepare("SELECT path FROM files")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+    let mut deleted = 0;
+    for row in rows {
+        let path = row?;
+        if !Path::new(&path).exists() {
+            deleted += remove_file(conn, &path)?;
+        }
+    }
+
+    Ok(deleted)
+}
+
 fn build_prefilter_query(plan: &query::QueryPlan) -> (String, Vec<String>) {
     let mut clauses = Vec::new();
     let mut params = Vec::new();
@@ -338,6 +366,45 @@ mod tests {
             .query_row("SELECT ext FROM files LIMIT 1", [], |row| row.get(0))
             .expect("ext should be backfilled");
         assert_eq!(ext, ".tsx");
+    }
+
+    #[test]
+    fn insert_file_populates_metadata_columns() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        create_tables(&conn).expect("schema creation should succeed");
+
+        insert_file(&conn, "/tmp/sample/demo.tsx").expect("insert should succeed");
+
+        let (basename, ext, dir): (String, String, String) = conn
+            .query_row(
+                "SELECT basename, ext, dir FROM files WHERE path = '/tmp/sample/demo.tsx'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("metadata should be queryable");
+
+        assert_eq!(basename, "demo.tsx");
+        assert_eq!(ext, ".tsx");
+        assert_eq!(dir, "/tmp/sample");
+    }
+
+    #[test]
+    fn remove_files_under_prefix_cleans_nested_rows() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        create_tables(&conn).expect("schema creation should succeed");
+
+        insert_file(&conn, "/repo/src/app.tsx").expect("insert should succeed");
+        insert_file(&conn, "/repo/src/lib/core.ts").expect("insert should succeed");
+        insert_file(&conn, "/repo/tests/app.tsx").expect("insert should succeed");
+
+        let removed =
+            remove_files_under_prefix(&conn, "/repo/src").expect("prefix removal should succeed");
+        assert_eq!(removed, 2);
+
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .expect("remaining count should be readable");
+        assert_eq!(remaining, 1);
     }
 }
 
