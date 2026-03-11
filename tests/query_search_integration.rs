@@ -100,3 +100,35 @@ fn extension_and_directory_scope_work_together() {
     assert!(results.contains(&"/repo/src/ui/App.tsx".to_string()));
     assert!(results.contains(&"/repo/src/core/lib.tsx".to_string()));
 }
+
+#[test]
+fn star_wildcard_matches_any_length_before_extension() {
+    let conn = setup_conn_with_paths(&[
+        "/repo/src/ui/App.tsx",
+        "/repo/src/ui/Index.tsx",
+        "/repo/src/ui/App.ts",
+        "/repo/src/ui/App.tsxx",
+    ]);
+
+    let results = db::search_files(&conn, "*.tsx").expect("search should work");
+
+    assert_eq!(results.len(), 2);
+    assert!(results.contains(&"/repo/src/ui/App.tsx".to_string()));
+    assert!(results.contains(&"/repo/src/ui/Index.tsx".to_string()));
+}
+
+#[test]
+fn question_mark_wildcard_matches_single_character_only() {
+    let conn = setup_conn_with_paths(&[
+        "/repo/src/file.tsx",
+        "/repo/src/file.tsa",
+        "/repo/src/file.ts",
+        "/repo/src/file.tsxx",
+    ]);
+
+    let results = db::search_files(&conn, "*.ts?").expect("search should work");
+
+    assert_eq!(results.len(), 2);
+    assert!(results.contains(&"/repo/src/file.tsx".to_string()));
+    assert!(results.contains(&"/repo/src/file.tsa".to_string()));
+}
