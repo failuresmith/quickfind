@@ -1,6 +1,6 @@
 [package]
 name = "quickfind"
-version = "1.4.3"
+version = "1.4.4"
 edition = "2021"
 description = "Search local files instantly with configurable, interactive CLI"
 license = "MIT"

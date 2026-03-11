@@ -1,5 +1,9 @@
 ## Changelog
 
+### v1.4.4
+
+* Fix: `?` wildcard now works independently in extension filters (e.g. `.ts?`) without requiring a leading `*`.
+
 ### v1.4.3
 
 * Improved: Wildcard pattern filters now support expected glob semantics, including `*` for any-length and `?` for exactly one character (e.g. `*.ts?`).
