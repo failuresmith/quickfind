@@ -36,6 +36,7 @@ fn watcher_config(root: &Path, ignore: Vec<String>) -> Config {
         depth: 20,
         highlight_color: None,
         editor: None,
+        watch_pending_ram_cap_mb: 200,
     }
 }
 

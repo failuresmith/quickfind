@@ -12,37 +12,85 @@ Remember part of a filename? Find it instantly in milliseconds, open it in your 
 $ cargo install quickfind
 ```
 
-<details> <summary>Usage</summary>
+## Quick Start (recommended)
 
-## 1. Index once
+### 1) Build the index once
 
 ```bash
 $ quickfind --index
 ```
 
-## 2. Search any moment
+### 2) Enable always-on watcher daemon (Linux, user service)
+
+Create this file:
+
+`~/.config/systemd/user/quickfind-watcher.service`
+
+```ini
+[Unit]
+Description=quickfind watcher daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/home/YOUR_USER/.cargo/bin/quickfind --watch
+Restart=on-failure
+RestartSec=2
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target
+```
+
+Then enable it:
+
+```bash
+$ systemctl --user daemon-reload
+$ systemctl --user enable --now quickfind-watcher.service
+$ systemctl --user status quickfind-watcher.service
+```
+
+### 3) Search instantly any time
 
 ```bash
 $ quickfind <your-query>
 
-# OR
-
+# OR interactive mode
 $ quickfind
 ```
 
-## 3. Keep index in sync continuously (watch mode)
+---
+
+<details> <summary>Advanced Usage</summary>
+
+## Manual watcher mode (foreground)
 
 ```bash
+$ quickfind --index
+
 $ quickfind --watch
 ```
 
-### Optional fallback for unreliable native FS events
+## Polling fallback (when native fs events are unreliable)
 
 ```bash
 $ quickfind --watch --watch-poll
 
 # tune poll interval (ms)
 $ quickfind --watch --watch-poll --watch-poll-interval-ms 400
+```
+
+## Daemon logs
+
+```bash
+$ journalctl --user -u quickfind-watcher.service -f
+```
+
+## Disable daemon
+
+```bash
+$ systemctl --user disable --now quickfind-watcher.service
 ```
 </details> 
 
@@ -62,6 +110,10 @@ So I built **quickfind** in Rust. Its configurable indexing and interactive TUI 
 - **Efficient Indexing:** Traverses directories once and stores paths in a local database for lightning-fast searching.
 - **Background Sync:** `--watch` mode keeps the index updated in near real-time as files change.
 - **Polling Fallback:** `--watch-poll` provides cross-filesystem resilience when native notifications are unreliable.
+- **Bounded Memory Watcher:** Pending watcher memory is capped (`watch_pending_ram_cap_mb`, default `200`).
+- **Spill-to-Disk Backpressure:** Overflow snapshots are persisted to disk and replayed safely.
+- **Graceful Degradation:** If both RAM and spool are pressured, watcher falls back to coarse scoped reindex markers (correctness first).
+- **Crash-Safe Recovery:** Pending spool segments are replayed on watcher startup.
 - **Interactive Interface:** Browse results with a minimal TUI, open files in default apps or `vim`.
 
 </details>
@@ -108,6 +160,7 @@ ignore = [
 depth = 10
 editor = "vim" # "vi" or "code" or "subl" or any editor of your choice
 highlight_color = "lightblue"
+watch_pending_ram_cap_mb = 200
 ```
 
 - `include`: Absolute paths to directories you want to index.
@@ -115,6 +168,7 @@ highlight_color = "lightblue"
 - `depth`: Maximum directory depth to traverse.
 - `editor`: Preferred editor for opening selected files from TUI.
 - `highlight_color`: Optional result highlight color in TUI.
+- `watch_pending_ram_cap_mb`: Watcher in-memory pending buffer cap (MB). Default is `200` if omitted.
 </details> 
 
 <details> <summary>Interactive Mode</summary>
@@ -134,7 +188,7 @@ highlight_color = "lightblue"
 - `config.rs`: Loads and manages user configs (`~/.quickfind/conf.toml`)
 - `db.rs`: Handles persistent file indexing storage
 - `indexing.rs`: Traverses directories and populates the database
-- `watcher.rs`: Filesystem watcher loop, batching, pruning, and sync logic
+- `watcher.rs`: Filesystem watcher loop with debounce, batching, adaptive prune, bounded pending queue, spill-to-disk segments, replay/quarantine, and overflow fallback
 - `tui.rs`: Interactive Text User Interface
 
 </details> 

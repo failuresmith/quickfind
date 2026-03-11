@@ -4,6 +4,10 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 
+fn default_watch_pending_ram_cap_mb() -> usize {
+    200
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub include: Vec<String>,
@@ -11,6 +15,8 @@ pub struct Config {
     pub depth: usize,
     pub highlight_color: Option<String>,
     pub editor: Option<String>,
+    #[serde(default = "default_watch_pending_ram_cap_mb")]
+    pub watch_pending_ram_cap_mb: usize,
 }
 
 impl Default for Config {
@@ -67,6 +73,7 @@ impl Default for Config {
             depth: 10,
             highlight_color: None,
             editor: None, // vi, vim, nvim, subl, code, etc.
+            watch_pending_ram_cap_mb: default_watch_pending_ram_cap_mb(),
         }
     }
 }
