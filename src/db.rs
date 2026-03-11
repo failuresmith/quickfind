@@ -7,6 +7,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MAX_CANDIDATES: usize = 4000;
 const MAX_RESULTS: usize = 500;
 const DB_SCHEMA_VERSION: i32 = 2;
+const DEFAULT_PRUNE_BATCH_SIZE: usize = 512;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BatchApplyStats {
+    pub removed_rows: usize,
+    pub upserted_rows: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PruneProgress {
+    pub next_cursor: i64,
+    pub scanned_rows: usize,
+    pub removed_rows: usize,
+}
 
 pub fn get_db_path() -> Result<PathBuf> {
     let home_dir = home::home_dir().ok_or_else(|| eyre::eyre!("Could not find home directory"))?;
@@ -35,22 +49,7 @@ pub fn create_tables(conn: &Connection) -> RusqliteResult<()> {
 }
 
 pub fn insert_file(conn: &Connection, path: &str) -> RusqliteResult<usize> {
-    let normalized = Path::new(path);
-    let basename = normalized
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let ext = normalized
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| format!(".{}", s.to_lowercase()))
-        .unwrap_or_default();
-    let dir = normalized
-        .parent()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let (basename, ext, dir) = extract_path_metadata(path);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -126,18 +125,125 @@ pub fn remove_files_under_prefix(conn: &Connection, dir_path: &str) -> RusqliteR
 }
 
 pub fn prune_missing_files(conn: &Connection) -> RusqliteResult<usize> {
-    let mut stmt = conn.prepare("SELECT path FROM files")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut cursor = 0;
+    let mut total_deleted = 0;
 
-    let mut deleted = 0;
+    loop {
+        let progress = prune_missing_files_incremental(conn, cursor, DEFAULT_PRUNE_BATCH_SIZE)?;
+        total_deleted += progress.removed_rows;
+
+        if progress.scanned_rows == 0 {
+            break;
+        }
+
+        if progress.next_cursor <= cursor {
+            break;
+        }
+
+        cursor = progress.next_cursor;
+    }
+
+    Ok(total_deleted)
+}
+
+pub fn prune_missing_files_incremental(
+    conn: &Connection,
+    cursor: i64,
+    batch_size: usize,
+) -> RusqliteResult<PruneProgress> {
+    let batch_size = batch_size.max(1);
+
+    let mut stmt = conn.prepare(
+        "SELECT id, path FROM files
+         WHERE id > ?1
+         ORDER BY id
+         LIMIT ?2",
+    )?;
+
+    let rows = stmt.query_map(params![cursor, batch_size as i64], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut scanned_rows = 0;
+    let mut removed_rows = 0;
+    let mut next_cursor = cursor;
+
     for row in rows {
-        let path = row?;
+        let (id, path) = row?;
+        scanned_rows += 1;
+        next_cursor = id;
+
         if !Path::new(&path).exists() {
-            deleted += remove_file(conn, &path)?;
+            removed_rows += conn.execute("DELETE FROM files WHERE id = ?1", params![id])?;
         }
     }
 
-    Ok(deleted)
+    if scanned_rows == 0 && cursor > 0 {
+        return prune_missing_files_incremental(conn, 0, batch_size);
+    }
+
+    Ok(PruneProgress {
+        next_cursor,
+        scanned_rows,
+        removed_rows,
+    })
+}
+
+pub fn apply_batched_updates(
+    conn: &mut Connection,
+    removed_paths: &[String],
+    upsert_paths: &[String],
+) -> RusqliteResult<BatchApplyStats> {
+    if removed_paths.is_empty() && upsert_paths.is_empty() {
+        return Ok(BatchApplyStats::default());
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let tx = conn.transaction()?;
+    let mut delete_exact_stmt = tx.prepare("DELETE FROM files WHERE path = ?1")?;
+    let mut delete_prefix_stmt = tx.prepare(
+        "DELETE FROM files WHERE path = ?1 OR path LIKE ?2",
+    )?;
+    let mut upsert_stmt = tx.prepare(
+        "INSERT INTO files (path, basename, ext, dir, mtime, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(path) DO UPDATE SET
+            basename = excluded.basename,
+            ext = excluded.ext,
+            dir = excluded.dir,
+            mtime = excluded.mtime,
+            indexed_at = excluded.indexed_at",
+    )?;
+
+    let mut stats = BatchApplyStats::default();
+
+    for path in removed_paths {
+        let removed = delete_exact_stmt.execute(params![path])?;
+        if removed > 0 {
+            stats.removed_rows += removed;
+            continue;
+        }
+
+        let normalized = path.trim_end_matches('/');
+        let prefix = format!("{}/%", normalized);
+        stats.removed_rows += delete_prefix_stmt.execute(params![normalized, prefix])?;
+    }
+
+    for path in upsert_paths {
+        let (basename, ext, dir) = extract_path_metadata(path);
+        stats.upserted_rows += upsert_stmt.execute(params![path, basename, ext, dir, now, now])?;
+    }
+
+    drop(delete_exact_stmt);
+    drop(delete_prefix_stmt);
+    drop(upsert_stmt);
+    tx.commit()?;
+
+    Ok(stats)
 }
 
 fn build_prefilter_query(plan: &query::QueryPlan) -> (String, Vec<String>) {
@@ -188,10 +294,31 @@ fn build_prefilter_query(plan: &query::QueryPlan) -> (String, Vec<String>) {
 }
 
 fn longest_glob_literal(glob: &str) -> Option<String> {
-    glob.split(|c| matches!(c, '*' | '?' | '[' | ']'))
+    glob.split(['*', '?', '[', ']'])
         .map(|part| part.trim_matches('/').to_lowercase())
         .filter(|part| part.len() >= 2)
         .max_by_key(|part| part.len())
+}
+
+fn extract_path_metadata(path: &str) -> (String, String, String) {
+    let normalized = Path::new(path);
+    let basename = normalized
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let ext = normalized
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| format!(".{}", s.to_lowercase()))
+        .unwrap_or_default();
+    let dir = normalized
+        .parent()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    (basename, ext, dir)
 }
 
 fn ensure_base_files_table(conn: &Connection) -> RusqliteResult<()> {
@@ -249,22 +376,7 @@ fn backfill_metadata_columns(conn: &Connection) -> RusqliteResult<()> {
 
     for row in rows {
         let (id, path) = row?;
-        let normalized = Path::new(&path);
-        let basename = normalized
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let ext = normalized
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| format!(".{}", s.to_lowercase()))
-            .unwrap_or_default();
-        let dir = normalized
-            .parent()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let (basename, ext, dir) = extract_path_metadata(&path);
 
         conn.execute(
             "UPDATE files
@@ -405,6 +517,51 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
             .expect("remaining count should be readable");
         assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn apply_batched_updates_uses_single_transactional_pass() {
+        let mut conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        create_tables(&conn).expect("schema creation should succeed");
+
+        insert_file(&conn, "/repo/src/a.ts").expect("seed should insert");
+        insert_file(&conn, "/repo/src/b.ts").expect("seed should insert");
+
+        let removed = vec!["/repo/src/a.ts".to_string(), "/repo/ghost".to_string()];
+        let upserts = vec!["/repo/src/c.tsx".to_string(), "/repo/src/b.ts".to_string()];
+
+        let stats = apply_batched_updates(&mut conn, &removed, &upserts)
+            .expect("batch apply should succeed");
+
+        assert!(stats.removed_rows >= 1);
+        assert_eq!(stats.upserted_rows, 2);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .expect("count should be readable");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn prune_missing_files_incremental_scans_in_chunks() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        create_tables(&conn).expect("schema creation should succeed");
+
+        insert_file(&conn, "/definitely/missing/one.rs").expect("insert should succeed");
+        insert_file(&conn, "/definitely/missing/two.rs").expect("insert should succeed");
+
+        let first = prune_missing_files_incremental(&conn, 0, 1).expect("first prune should work");
+        assert_eq!(first.scanned_rows, 1);
+        assert_eq!(first.removed_rows, 1);
+
+        let second = prune_missing_files_incremental(&conn, first.next_cursor, 4)
+            .expect("second prune should work");
+        assert!(second.removed_rows <= 1);
+
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .expect("count should be readable");
+        assert_eq!(remaining, 0);
     }
 }
 

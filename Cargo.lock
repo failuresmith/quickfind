@@ -618,6 +618,7 @@ dependencies = [
  "opener",
  "rusqlite",
  "serde",
+ "signal-hook",
  "toml",
  "tui",
  "walkdir",

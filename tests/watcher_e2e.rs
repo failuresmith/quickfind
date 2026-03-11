@@ -52,7 +52,7 @@ fn all_paths(conn: &Connection) -> Vec<String> {
 
 #[test]
 fn watcher_handles_create_rename_delete_bursts() {
-    let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+    let mut conn = Connection::open_in_memory().expect("in-memory sqlite should open");
     db::create_tables(&conn).expect("schema should be initialized");
 
     let temp = TempDirGuard::new("watch_burst");
@@ -87,7 +87,7 @@ fn watcher_handles_create_rename_delete_bursts() {
         stop_tx.send(()).expect("stop signal should send");
     });
 
-    watcher::run_watcher_with_stop(&conn, &config, false, &stop_rx)
+    watcher::run_watcher_with_stop(&mut conn, &config, false, &stop_rx)
         .expect("watcher should run and stop cleanly");
     worker.join().expect("worker thread should join");
 
@@ -108,7 +108,7 @@ fn watcher_handles_create_rename_delete_bursts() {
 
 #[test]
 fn watcher_respects_editor_temp_ignore_patterns() {
-    let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+    let mut conn = Connection::open_in_memory().expect("in-memory sqlite should open");
     db::create_tables(&conn).expect("schema should be initialized");
 
     let temp = TempDirGuard::new("watch_editor_tmp");
@@ -146,7 +146,7 @@ fn watcher_respects_editor_temp_ignore_patterns() {
         stop_tx.send(()).expect("stop signal should send");
     });
 
-    watcher::run_watcher_with_stop(&conn, &config, false, &stop_rx)
+    watcher::run_watcher_with_stop(&mut conn, &config, false, &stop_rx)
         .expect("watcher should run and stop cleanly");
     worker.join().expect("worker thread should join");
 
@@ -159,4 +159,42 @@ fn watcher_respects_editor_temp_ignore_patterns() {
     assert!(paths.iter().all(|p| !p.ends_with(".tmp")));
     assert!(paths.iter().all(|p| !p.ends_with('~')));
     assert!(paths.iter().all(|p| !p.contains("/.hidden")));
+}
+
+#[test]
+fn watcher_poll_backend_syncs_changes() {
+    let mut conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+    db::create_tables(&conn).expect("schema should be initialized");
+
+    let temp = TempDirGuard::new("watch_poll");
+    let config = watcher_config(&temp.path, vec![]);
+
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let root = temp.path.clone();
+
+    let worker = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(400));
+
+        fs::write(root.join("poll_file.txt"), "hello").expect("poll file should be written");
+
+        thread::sleep(Duration::from_millis(1500));
+        stop_tx.send(()).expect("stop signal should send");
+    });
+
+    watcher::run_watcher_with_backend_and_stop(
+        &mut conn,
+        &config,
+        false,
+        watcher::WatchBackend::Poll {
+            interval: Duration::from_millis(150),
+        },
+        &stop_rx,
+    )
+    .expect("watcher poll backend should run");
+
+    worker.join().expect("worker thread should join");
+
+    let paths = all_paths(&conn);
+    let root_str = temp.path.to_string_lossy();
+    assert!(paths.contains(&format!("{root_str}/poll_file.txt")));
 }
