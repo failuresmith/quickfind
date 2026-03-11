@@ -1,5 +1,9 @@
 ## Changelog
 
+### v1.4.3
+
+* Improved: Wildcard pattern filters now support expected glob semantics, including `*` for any-length and `?` for exactly one character (e.g. `*.ts?`).
+
 ### v1.4.2
 
 * Improved: Search input now supports `Ctrl+Shift+Left/Right` to expand or shrink text selection by word boundaries.
