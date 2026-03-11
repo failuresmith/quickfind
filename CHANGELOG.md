@@ -1,5 +1,14 @@
 ## Changelog
 
+### v1.5.3
+
+* Performance: Added single-writer batched transactional watcher apply path (`apply_batched_updates`) to reduce SQLite lock churn during event bursts.
+* Performance: Switched prune flow to SQL-assisted incremental cursor-based batches (`prune_missing_files_incremental`) with adaptive interval scheduling.
+* Reliability: Added signal-aware graceful watcher shutdown (`SIGINT`, `SIGTERM`) to reduce abrupt termination risk.
+* Reliability: Added optional polling watcher fallback mode (`--watch-poll`, `--watch-poll-interval-ms`) for filesystems with unreliable native notifications.
+* Observability: Added watcher health telemetry in verbose mode (events/sec, flush/prune latency, row counters) and backpressure warnings.
+* Test: Added poll-backend e2e coverage and updated watcher e2e harness for stoppable backends.
+
 ### v1.5.2
 
 * Added: integration/e2e watcher harness (`tests/watcher_e2e.rs`) covering create/rename/delete bursts under real OS filesystem event streams.
