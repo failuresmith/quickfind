@@ -1,5 +1,12 @@
 ## Changelog
 
+### v1.5.0
+
+* Added: Database schema versioning with migration scaffolding (PRAGMA `user_version`) to support safer future upgrades.
+* Added: Metadata columns and migration backfill flow in `files` table (`basename`, `ext`, `dir`, `mtime`, `indexed_at`).
+* Added: `usage_stats` table + supporting indexes as roadmap groundwork for future usage-aware ranking.
+* Added: migration integrity tests for fresh and legacy database states.
+
 ### v1.4.5
 
 * Fix: Wildcard queries now highlight matched result segments in the TUI (e.g. `.ts?` highlights `tsx`).
