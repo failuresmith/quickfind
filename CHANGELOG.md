@@ -1,5 +1,9 @@
 ## Changelog
 
+### v1.4.1
+
+* Improved: Search input selection now supports `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` clipboard-style editing behavior.
+
 ### v1.4.0
 
 * Improved: Added richer result navigation in Results focus (`PageUp`, `PageDown`, `Home`, `End`).
