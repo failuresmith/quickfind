@@ -111,10 +111,12 @@ pub fn search_files(conn: &Connection, term: &str) -> RusqliteResult<Vec<String>
         .collect())
 }
 
+#[allow(dead_code)]
 pub fn remove_file(conn: &Connection, path: &str) -> RusqliteResult<usize> {
     conn.execute("DELETE FROM files WHERE path = ?1", params![path])
 }
 
+#[allow(dead_code)]
 pub fn remove_files_under_prefix(conn: &Connection, dir_path: &str) -> RusqliteResult<usize> {
     let normalized = dir_path.trim_end_matches('/');
     let prefix = format!("{}/%", normalized);

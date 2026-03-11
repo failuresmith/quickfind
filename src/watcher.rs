@@ -35,6 +35,7 @@ impl Default for WatchBackend {
     }
 }
 
+#[allow(dead_code)]
 pub fn run_watcher(conn: &mut rusqlite::Connection, config: &Config, verbose: bool) -> Result<()> {
     run_watcher_with_backend(conn, config, verbose, WatchBackend::Native)
 }
