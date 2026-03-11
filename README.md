@@ -12,16 +12,24 @@ Remember part of a filename? Find it instantly in milliseconds, open it in your 
 $ cargo install quickfind
 ```
 
-## One-command onboarding (recommended)
+## Seamless onboarding (works with `cargo install quickfind`)
+
+After install, just run:
 
 ```bash
-$ ./install.sh
+$ quickfind
 ```
 
-The installer will:
-- run `quickfind --init` to ask your index locations interactively,
-- build the initial index,
-- optionally install a Linux user daemon for always-on sync.
+If this is your first run (no config yet), quickfind automatically starts setup wizard:
+- asks your index locations,
+- builds initial index,
+- optionally enables Linux user daemon.
+
+You can also run setup manually at any time:
+
+```bash
+$ quickfind --setup
+```
 
 ## Quick Start (recommended)
 
@@ -32,6 +40,14 @@ $ quickfind --init
 ```
 
 This onboarding command asks for directories to index and writes `~/.quickfind/conf.toml`.
+
+### 1-b) Or run full setup in one command
+
+```bash
+$ quickfind --setup
+```
+
+This runs onboarding + indexing + optional daemon install in one flow.
 
 ### 2) Build the index once
 
