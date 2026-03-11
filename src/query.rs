@@ -70,7 +70,7 @@ pub fn path_matches_query(path: &str, plan: &QueryPlan) -> bool {
         && !plan
             .ext_filters
             .iter()
-            .any(|suffix| normalized.ends_with(suffix))
+            .any(|suffix| extension_filter_matches(suffix, &normalized, &basename))
     {
         return false;
     }
@@ -94,6 +94,23 @@ pub fn path_matches_query(path: &str, plan: &QueryPlan) -> bool {
     }
 
     true
+}
+
+fn extension_filter_matches(suffix: &str, normalized_path: &str, basename: &str) -> bool {
+    if has_glob_meta(suffix) {
+        let pattern_candidate = if suffix.starts_with('*') {
+            suffix.to_string()
+        } else {
+            format!("*{}", suffix)
+        };
+
+        if let Ok(pattern) = Pattern::new(&pattern_candidate) {
+            return pattern.matches(basename);
+        }
+        false
+    } else {
+        normalized_path.ends_with(suffix)
+    }
 }
 
 pub fn score_path(path: &str, plan: &QueryPlan) -> i32 {

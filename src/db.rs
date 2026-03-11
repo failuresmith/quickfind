@@ -92,10 +92,17 @@ fn build_prefilter_query(plan: &query::QueryPlan) -> (String, Vec<String>) {
     } else if !plan.ext_filters.is_empty() {
         let mut ext_clauses = Vec::new();
         for ext in &plan.ext_filters {
+            if ext.contains('*') || ext.contains('?') || ext.contains('[') {
+                // Wildcard extension filters are resolved in query::path_matches_query.
+                // Keep SQL prefilter broad to avoid dropping valid matches.
+                continue;
+            }
             ext_clauses.push("LOWER(path) LIKE ?".to_string());
             params.push(format!("%{}", ext));
         }
-        clauses.push(format!("({})", ext_clauses.join(" OR ")));
+        if !ext_clauses.is_empty() {
+            clauses.push(format!("({})", ext_clauses.join(" OR ")));
+        }
     } else {
         for glob in &plan.path_globs {
             if let Some(fragment) = longest_glob_literal(glob) {

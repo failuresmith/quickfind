@@ -132,3 +132,19 @@ fn question_mark_wildcard_matches_single_character_only() {
     assert!(results.contains(&"/repo/src/file.tsx".to_string()));
     assert!(results.contains(&"/repo/src/file.tsa".to_string()));
 }
+
+#[test]
+fn question_mark_works_without_star_prefix() {
+    let conn = setup_conn_with_paths(&[
+        "/repo/src/file.tsx",
+        "/repo/src/file.tsa",
+        "/repo/src/file.ts",
+        "/repo/src/file.tsxx",
+    ]);
+
+    let results = db::search_files(&conn, ".ts?").expect("search should work");
+
+    assert_eq!(results.len(), 2);
+    assert!(results.contains(&"/repo/src/file.tsx".to_string()));
+    assert!(results.contains(&"/repo/src/file.tsa".to_string()));
+}
