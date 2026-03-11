@@ -34,10 +34,20 @@ struct Cli {
     /// Polling interval in milliseconds (only used with --watch-poll)
     #[clap(long, default_value_t = 700, requires = "watch_poll")]
     watch_poll_interval_ms: u64,
+
+    /// Interactive onboarding to configure include paths and watcher RAM cap
+    #[clap(long, action)]
+    init: bool,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.init {
+        config::run_init_onboarding()?;
+        return Ok(());
+    }
+
     let config = config::load_config()?;
     let mut conn = db::get_connection()?;
     db::create_tables(&conn)?;

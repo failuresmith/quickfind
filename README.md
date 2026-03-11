@@ -12,15 +12,34 @@ Remember part of a filename? Find it instantly in milliseconds, open it in your 
 $ cargo install quickfind
 ```
 
+## One-command onboarding (recommended)
+
+```bash
+$ ./install.sh
+```
+
+The installer will:
+- run `quickfind --init` to ask your index locations interactively,
+- build the initial index,
+- optionally install a Linux user daemon for always-on sync.
+
 ## Quick Start (recommended)
 
-### 1) Build the index once
+### 1) Pick your locations interactively
+
+```bash
+$ quickfind --init
+```
+
+This onboarding command asks for directories to index and writes `~/.quickfind/conf.toml`.
+
+### 2) Build the index once
 
 ```bash
 $ quickfind --index
 ```
 
-### 2) Enable always-on watcher daemon (Linux, user service)
+### 3) Enable always-on watcher daemon (Linux, user service)
 
 Create this file:
 
@@ -51,7 +70,7 @@ $ systemctl --user enable --now quickfind-watcher.service
 $ systemctl --user status quickfind-watcher.service
 ```
 
-### 3) Search instantly any time
+### 4) Search instantly any time
 
 ```bash
 $ quickfind <your-query>
@@ -67,6 +86,8 @@ $ quickfind
 ## Manual watcher mode (foreground)
 
 ```bash
+$ quickfind --init
+
 $ quickfind --index
 
 $ quickfind --watch
@@ -107,6 +128,7 @@ So I built **quickfind** in Rust. Its configurable indexing and interactive TUI 
 <details> <summary>Features</summary>
 
 - **Configurable:** Customize search locations, ignored paths, and search depth via a simple config file.
+- **Interactive Onboarding:** `quickfind --init` asks for locations and writes config for you.
 - **Efficient Indexing:** Traverses directories once and stores paths in a local database for lightning-fast searching.
 - **Background Sync:** `--watch` mode keeps the index updated in near real-time as files change.
 - **Polling Fallback:** `--watch-poll` provides cross-filesystem resilience when native notifications are unreliable.
@@ -185,7 +207,7 @@ watch_pending_ram_cap_mb = 200
 <details> <summary>Architecture</summary>
 
 - `main.rs`: CLI parsing and orchestration
-- `config.rs`: Loads and manages user configs (`~/.quickfind/conf.toml`)
+- `config.rs`: Loads/saves config and powers interactive onboarding (`quickfind --init`)
 - `db.rs`: Handles persistent file indexing storage
 - `indexing.rs`: Traverses directories and populates the database
 - `watcher.rs`: Filesystem watcher loop with debounce, batching, adaptive prune, bounded pending queue, spill-to-disk segments, replay/quarantine, and overflow fallback
